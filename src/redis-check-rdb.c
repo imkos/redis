@@ -155,6 +155,7 @@ void rdbCheckSetError(const char *fmt, ...) {
     rdbstate.error_set = 1;
 }
 
+#ifndef _WIN32
 /* During RDB check we setup a special signal handler for memory violations
  * and similar conditions, so that we can log the offending part of the RDB
  * if the crash is due to broken content. */
@@ -178,6 +179,7 @@ void rdbCheckSetupSignals(void) {
     sigaction(SIGFPE, &act, NULL);
     sigaction(SIGILL, &act, NULL);
 }
+#endif
 
 /* Check the specified RDB file. */
 int redis_check_rdb(char *rdbfilename) {
@@ -342,7 +344,7 @@ int redis_check_rdb_main(int argc, char **argv) {
     server.loading_process_events_interval_bytes = 0;
     rdbCheckMode = 1;
     rdbCheckInfo("Checking RDB file %s", argv[1]);
-    rdbCheckSetupSignals();
+    POSIX_ONLY(rdbCheckSetupSignals();)
     int retval = redis_check_rdb(argv[1]);
     if (retval == 0) {
         rdbCheckInfo("\\o/ RDB looks OK! \\o/");
