@@ -625,7 +625,12 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
     /* When the insert position is not equal to the tail, we need to
      * make sure that the next entry can hold this entry's length in
      * its prevlen field. */
+    int forcelarge = 0;
     nextdiff = (p[0] != ZIP_END) ? zipPrevLenByteDiff(p,(unsigned int)reqlen) : 0; WIN_PORT_FIX /* cast (unsigned int) */
+    if (nextdiff == -4 && reqlen < 4) {
+        nextdiff = 0;
+        forcelarge = 1;
+    }
 
     /* Store offset because a realloc may change the address of zl. */
     offset = p-zl;
@@ -638,7 +643,10 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
         memmove(p+reqlen,p-nextdiff,curlen-offset-1+nextdiff);
 
         /* Encode this entry's raw length in the next entry. */
-        zipPrevEncodeLength(p+reqlen,(unsigned int)reqlen);                     WIN_PORT_FIX /* cast (unsigned int) */
+        if (forcelarge)
+            zipPrevEncodeLengthForceLarge(p+reqlen,(unsigned int)reqlen);
+        else
+            zipPrevEncodeLength(p+reqlen,(unsigned int)reqlen);                     WIN_PORT_FIX /* cast (unsigned int) */
 
         /* Update offset for tail */
         ZIPLIST_TAIL_OFFSET(zl) =

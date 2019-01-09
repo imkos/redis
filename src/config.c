@@ -882,7 +882,7 @@ void configSetCommand(client *c) {
             char *eptr;
             PORT_LONG val;
 
-            val = strtol(v[j], &eptr, 10);
+            val = strtoll(v[j], &eptr, 10);
             if (eptr[0] != '\0' ||
                 ((j & 1) == 0 && val < 1) ||
                 ((j & 1) == 1 && val < 0)) {
@@ -896,8 +896,8 @@ void configSetCommand(client *c) {
             time_t seconds;
             int changes;
 
-            seconds = strtol(v[j],NULL,10);
-            changes = strtol(v[j+1],NULL,10);
+            seconds = strtoll(v[j],NULL,10);
+            changes = strtoll(v[j+1],NULL,10);
             appendServerSaveParams(seconds, changes);
         }
         sdsfreesplitres(v,vlen);
@@ -943,9 +943,9 @@ void configSetCommand(client *c) {
             int soft_seconds;
 
             class = getClientTypeByName(v[j]);
-            hard = strtol(v[j+1],NULL,10);
-            soft = strtol(v[j+2],NULL,10);
-            soft_seconds = strtol(v[j+3],NULL,10);
+            hard = strtoll(v[j+1],NULL,10);
+            soft = strtoll(v[j+2],NULL,10);
+            soft_seconds = strtoll(v[j+3],NULL,10);
 
             server.client_obuf_limits[class].hard_limit_bytes = hard;
             server.client_obuf_limits[class].soft_limit_bytes = soft;
@@ -998,8 +998,6 @@ void configSetCommand(client *c) {
       "timeout",server.maxidletime,0,LONG_MAX) {
     } config_set_numerical_field(
       "auto-aof-rewrite-percentage",server.aof_rewrite_perc,0,LLONG_MAX){
-    } config_set_numerical_field(
-      "auto-aof-rewrite-min-size",server.aof_rewrite_min_size,0,LLONG_MAX) {
     } config_set_numerical_field(
       "hash-max-ziplist-entries",server.hash_max_ziplist_entries,0,LLONG_MAX) {
     } config_set_numerical_field(
@@ -1074,6 +1072,8 @@ void configSetCommand(client *c) {
         }
     } config_set_memory_field("repl-backlog-size",ll) {
         resizeReplicationBacklog(ll);
+    } config_set_memory_field("auto-aof-rewrite-min-size",ll) {
+        server.aof_rewrite_min_size = ll;
 
     /* Enumeration fields.
      * config_set_enum_field(name,var,enum_var) */

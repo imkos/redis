@@ -128,6 +128,7 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
             if (nwritten <= 0) return;
             memmove(block->buf,block->buf+nwritten,block->used-nwritten);
             block->used -= nwritten;
+            block->free += nwritten;
         }
         if (block->used == 0) listDelNode(server.aof_rewrite_buf_blocks,ln);
     }
@@ -501,9 +502,9 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     PORT_LONGLONG when;
     robj *argv[3];
 
-    /* Make sure we can use strtol */
+    /* Make sure we can use strtoll */
     seconds = getDecodedObject(seconds);
-    when = strtol(seconds->ptr,NULL,10);
+    when = strtoll(seconds->ptr,NULL,10);
     /* Convert argument into milliseconds for EXPIRE, SETEX, EXPIREAT */
     if (cmd->proc == expireCommand || cmd->proc == setexCommand ||
         cmd->proc == expireatCommand)
@@ -554,6 +555,22 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         buf = catAppendOnlyGenericCommand(buf,3,tmpargv);
         decrRefCount(tmpargv[0]);
         buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
+    } else if (cmd->proc == setCommand && argc > 3) {
+        int i;
+        robj *exarg = NULL, *pxarg = NULL;
+        /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
+        buf = catAppendOnlyGenericCommand(buf,3,argv);
+        for (i = 3; i < argc; i ++) {
+            if (!strcasecmp(argv[i]->ptr, "ex")) exarg = argv[i+1];
+            if (!strcasecmp(argv[i]->ptr, "px")) pxarg = argv[i+1];
+        }
+        serverAssert(!(exarg && pxarg));
+        if (exarg)
+            buf = catAppendOnlyExpireAtCommand(buf,server.expireCommand,argv[1],
+                                               exarg);
+        if (pxarg)
+            buf = catAppendOnlyExpireAtCommand(buf,server.pexpireCommand,argv[1],
+                                               pxarg);
     } else {
         /* All the other commands don't need translation or need the
          * same translation already operated in the command vector
@@ -1338,6 +1355,7 @@ int rewriteAppendOnlyFileBackground(void) {
             serverLog(LL_WARNING,
                 "Can't rewrite append only file in background: fork: %s",
                 strerror(errno));
+            aofClosePipes();
             return C_ERR;
         }
         serverLog(LL_NOTICE,

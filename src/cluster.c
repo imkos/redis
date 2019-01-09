@@ -236,6 +236,7 @@ int clusterLoadConfig(char *filename) {
                 *p = '\0';
                 direction = p[1]; /* Either '>' or '<' */
                 slot = atoi(argv[j]+1);
+                if (slot < 0 || slot >= CLUSTER_SLOTS) goto fmterr;
                 p += 3;
                 cn = clusterLookupNode(p);
                 if (!cn) {
@@ -255,6 +256,8 @@ int clusterLoadConfig(char *filename) {
             } else {
                 start = stop = atoi(argv[j]);
             }
+            if (start < 0 || start >= CLUSTER_SLOTS) goto fmterr;
+            if (stop < 0 || stop >= CLUSTER_SLOTS) goto fmterr;
             while(start <= stop) clusterAddSlot(n, start++);
         }
 
@@ -399,7 +402,7 @@ int clusterLockConfig(char *filename) {
 
         } else {
             serverLog(LL_WARNING,
-                "Impossible to lock %s: %d", filename, err);
+                "Impossible to lock %s: %s", filename, strerror(errno));
         }
         close(fd);
         return C_ERR;
@@ -1327,13 +1330,15 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         clusterNode *node;
         sds ci;
 
-        ci = representClusterNodeFlags(sdsempty(), flags);
-        serverLog(LL_DEBUG,"GOSSIP %.40s %s:%d %s",
-            g->nodename,
-            g->ip,
-            ntohs(g->port),
-            ci);
-        sdsfree(ci);
+        if (server.verbosity == LL_DEBUG) {
+            ci = representClusterNodeFlags(sdsempty(), flags);
+            serverLog(LL_DEBUG,"GOSSIP %.40s %s:%d %s",
+                g->nodename,
+                g->ip,
+                ntohs(g->port),
+                ci);
+            sdsfree(ci);
+        }
 
         /* Update our state accordingly to the gossip sections */
         node = clusterLookupNode(g->nodename);
@@ -2147,7 +2152,7 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        aeCreateFileEvent(server.el,link->fd,AE_WRITABLE,
+        aeCreateFileEvent(server.el,link->fd,AE_WRITABLE|AE_BARRIER,
                     clusterWriteHandler,link);
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
@@ -2623,9 +2628,10 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
     }
 
     /* We can vote for this slave. */
-    clusterSendFailoverAuth(node);
     server.cluster->lastVoteEpoch = server.cluster->currentEpoch;
     node->slaveof->voted_time = mstime();
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|CLUSTER_TODO_FSYNC_CONFIG);
+    clusterSendFailoverAuth(node);
     serverLog(LL_WARNING, "Failover auth granted to %.40s for epoch %llu",
         node->name, (PORT_ULONGLONG) server.cluster->currentEpoch);
 }
@@ -3505,8 +3511,10 @@ int clusterDelNodeSlots(clusterNode *node) {
     int deleted = 0, j;
 
     for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (clusterNodeGetSlotBit(node,j)) clusterDelSlot(j);
-        deleted++;
+        if (clusterNodeGetSlotBit(node,j)) {
+            clusterDelSlot(j);
+            deleted++;
+        }
     }
     return deleted;
 }
@@ -3740,15 +3748,14 @@ static struct redisNodeFlags redisNodeFlagsTable[] = {
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */
 sds representClusterNodeFlags(sds ci, uint16_t flags) {
-    if (flags == 0) {
-        ci = sdscat(ci,"noflags,");
-    } else {
-        int i, size = sizeof(redisNodeFlagsTable)/sizeof(struct redisNodeFlags);
-        for (i = 0; i < size; i++) {
-            struct redisNodeFlags *nodeflag = redisNodeFlagsTable + i;
-            if (flags & nodeflag->flag) ci = sdscat(ci, nodeflag->name);
-        }
+    size_t orig_len = sdslen(ci);
+    int i, size = sizeof(redisNodeFlagsTable)/sizeof(struct redisNodeFlags);
+    for (i = 0; i < size; i++) {
+        struct redisNodeFlags *nodeflag = redisNodeFlagsTable + i;
+        if (flags & nodeflag->flag) ci = sdscat(ci, nodeflag->name);
     }
+    /* If no flag was added, add the "noflags" special flag. */
+    if (sdslen(ci) == orig_len) ci = sdscat(ci,"noflags,");
     sdsIncrLen(ci,-1); /* Remove trailing comma. */
     return ci;
 }
@@ -4072,7 +4079,7 @@ void clusterCommand(client *c) {
             }
             if ((n = clusterLookupNode(c->argv[4]->ptr)) == NULL) {
                 addReplyErrorFormat(c,"I don't know about node %s",
-                    (char*)c->argv[3]->ptr);
+                    (char*)c->argv[4]->ptr);
                 return;
             }
             server.cluster->importing_slots_from[slot] = n;
@@ -4717,13 +4724,13 @@ void migrateCommand(client *c) {
     int copy, replace, j;
     PORT_LONG timeout;
     PORT_LONG dbid;
-    PORT_LONGLONG ttl, expireat;
     robj **ov = NULL; /* Objects to migrate. */
     robj **kv = NULL; /* Key names. */
     robj **newargv = NULL; /* Used to rewrite the command as DEL ... keys ... */
     rio cmd, payload;
     int may_retry = 1;
     int write_error = 0;
+    int argv_rewritten = 0;
 
     /* To support the KEYS option we need the following additional state. */
     int first_key = 3; /* Argument index of the first key. */
@@ -4732,7 +4739,6 @@ void migrateCommand(client *c) {
     /* Initialization */
     copy = 0;
     replace = 0;
-    ttl = 0;
 
     /* Parse additional options */
     for (j = 6; j < c->argc; j++) {
@@ -4808,7 +4814,9 @@ try_again:
 
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
-        expireat = getExpire(c->db,kv[j]);
+        PORT_LONGLONG ttl = 0;
+        PORT_LONGLONG expireat = getExpire(c->db,kv[j]);
+
         if (expireat != -1) {
             ttl = expireat-mstime();
             if (ttl < 1) ttl = 1;
@@ -4928,12 +4936,20 @@ try_again:
         goto socket_err; /* A retry is guaranteed because of tested conditions.*/
     }
 
+    /* On socket errors, close the migration socket now that we still have
+     * the original host/port in the ARGV. Later the original command may be
+     * rewritten to DEL and will be too later. */
+    if (socket_error) migrateCloseSocket(c->argv[1],c->argv[2]);
+
     if (!copy) {
-        /* Translate MIGRATE as DEL for replication/AOF. */
+        /* Translate MIGRATE as DEL for replication/AOF. Note that we do
+         * this only for the keys for which we received an acknowledgement
+         * from the receiving Redis server, by using the del_idx index. */
         if (del_idx > 1) {
             newargv[0] = createStringObject("DEL",3);
             /* Note that the following call takes ownership of newargv. */
             replaceClientCommandVector(c,del_idx,newargv);
+            argv_rewritten = 1;
         } else {
             /* No key transfer acknowledged, no need to rewrite as DEL. */
             zfree(newargv);
@@ -4942,8 +4958,8 @@ try_again:
     }
 
     /* If we are here and a socket error happened, we don't want to retry.
-     * Just signal the problem to the client, but only do it if we don't
-     * already queued a different error reported by the destination server. */
+     * Just signal the problem to the client, but only do it if we did not
+     * already queue a different error reported by the destination server. */
     if (!error_from_target && socket_error) {
         may_retry = 0;
         goto socket_err;
@@ -4951,7 +4967,11 @@ try_again:
 
     if (!error_from_target) {
         /* Success! Update the last_dbid in migrateCachedSocket, so that we can
-         * avoid SELECT the next time if the target DB is the same. Reply +OK. */
+         * avoid SELECT the next time if the target DB is the same. Reply +OK.
+         *
+         * Note: If we reached this point, even if socket_error is true
+         * still the SELECT command succeeded (otherwise the code jumps to
+         * socket_err label. */
         cs->last_dbid = dbid;
         addReply(c,shared.ok);
     } else {
@@ -4961,7 +4981,6 @@ try_again:
 
     sdsfree(cmd.io.buffer.ptr);
     zfree(ov); zfree(kv); zfree(newargv);
-    if (socket_error) migrateCloseSocket(c->argv[1],c->argv[2]);
     return;
 
 /* On socket errors we try to close the cached socket and try again.
@@ -4974,7 +4993,12 @@ socket_err:
     /* Cleanup we want to perform in both the retry and no retry case.
      * Note: Closing the migrate socket will also force SELECT next time. */
     sdsfree(cmd.io.buffer.ptr);
-    migrateCloseSocket(c->argv[1],c->argv[2]);
+
+    /* If the command was rewritten as DEL and there was a socket error,
+     * we already closed the socket earlier. While migrateCloseSocket()
+     * is idempotent, the host/port arguments are now gone, so don't do it
+     * again. */
+    if (!argv_rewritten) migrateCloseSocket(c->argv[1],c->argv[2]);
     zfree(newargv);
     newargv = NULL; /* This will get reallocated on retry. */
 
@@ -5277,8 +5301,9 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             return 1;
         }
 
+        /* All keys must belong to the same slot, so check first key only. */
         di = dictGetIterator(c->bpop.keys);
-        while((de = dictNext(di)) != NULL) {
+        if ((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);
             int slot = keyHashSlot((char*)key->ptr, (int)sdslen(key->ptr));     WIN_PORT_FIX /* cast (int) */
             clusterNode *node = server.cluster->slots[slot];
@@ -5296,6 +5321,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
                     clusterRedirectClient(c,node,slot,
                         CLUSTER_REDIR_MOVED);
                 }
+                dictReleaseIterator(di);
                 return 1;
             }
         }

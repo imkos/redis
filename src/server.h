@@ -763,7 +763,8 @@ struct redisServer {
     off_t loading_process_events_interval_bytes;
     /* Fast pointers to often looked up command */
     struct redisCommand *delCommand, *multiCommand, *lpushCommand, *lpopCommand,
-                        *rpopCommand, *sremCommand, *execCommand;
+                        *rpopCommand, *sremCommand, *execCommand, *expireCommand,
+                        *pexpireCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     PORT_LONGLONG stat_numcommands;     /* Number of processed commands */
@@ -1450,6 +1451,7 @@ int *zunionInterGetKeys(struct redisCommand *cmd,robj **argv, int argc, int *num
 int *evalGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *sortGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 int *migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
+int *georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);
 
 /* Cluster */
 void clusterInit(void);
@@ -1648,8 +1650,10 @@ void replconfCommand(client *c);
 void waitCommand(client *c);
 void geoencodeCommand(client *c);
 void geodecodeCommand(client *c);
-void georadiusByMemberCommand(client *c);
+void georadiusbymemberCommand(client *c);
+void georadiusbymemberroCommand(client *c);
 void georadiusCommand(client *c);
+void georadiusroCommand(client *c);
 void geoaddCommand(client *c);
 void geohashCommand(client *c);
 void geoposCommand(client *c);
@@ -1660,6 +1664,7 @@ void pfcountCommand(client *c);
 void pfmergeCommand(client *c);
 void pfdebugCommand(client *c);
 void latencyCommand(client *c);
+void securityWarningCommand(client *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

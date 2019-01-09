@@ -156,7 +156,7 @@ struct redisCommand redisCommandTable[] = {
     {"linsert",linsertCommand,5,"wm",0,NULL,1,1,1,0,0},
     {"rpop",rpopCommand,2,"wF",0,NULL,1,1,1,0,0},
     {"lpop",lpopCommand,2,"wF",0,NULL,1,1,1,0,0},
-    {"brpop",brpopCommand,-3,"ws",0,NULL,1,1,1,0,0},
+    {"brpop",brpopCommand,-3,"ws",0,NULL,1,-2,1,0,0},
     {"brpoplpush",brpoplpushCommand,4,"wms",0,NULL,1,2,1,0,0},
     {"blpop",blpopCommand,-3,"ws",0,NULL,1,-2,1,0,0},
     {"llen",llenCommand,2,"rF",0,NULL,1,1,1,0,0},
@@ -292,8 +292,10 @@ struct redisCommand redisCommandTable[] = {
     {"wait",waitCommand,3,"s",0,NULL,0,0,0,0,0},
     {"command",commandCommand,0,"lt",0,NULL,0,0,0,0,0},
     {"geoadd",geoaddCommand,-5,"wm",0,NULL,1,1,1,0,0},
-    {"georadius",georadiusCommand,-6,"w",0,NULL,1,1,1,0,0},
-    {"georadiusbymember",georadiusByMemberCommand,-5,"w",0,NULL,1,1,1,0,0},
+    {"georadius",georadiusCommand,-6,"w",0,georadiusGetKeys,1,1,1,0,0},
+    {"georadius_ro",georadiusroCommand,-6,"r",0,georadiusGetKeys,1,1,1,0,0},
+    {"georadiusbymember",georadiusbymemberCommand,-5,"w",0,georadiusGetKeys,1,1,1,0,0},
+    {"georadiusbymember_ro",georadiusbymemberroCommand,-5,"r",0,georadiusGetKeys,1,1,1,0,0},
     {"geohash",geohashCommand,-2,"r",0,NULL,1,1,1,0,0},
     {"geopos",geoposCommand,-2,"r",0,NULL,1,1,1,0,0},
     {"geodist",geodistCommand,-4,"r",0,NULL,1,1,1,0,0},
@@ -302,6 +304,8 @@ struct redisCommand redisCommandTable[] = {
     {"pfcount",pfcountCommand,-2,"r",0,NULL,1,-1,1,0,0},
     {"pfmerge",pfmergeCommand,-2,"wm",0,NULL,1,-1,1,0,0},
     {"pfdebug",pfdebugCommand,-3,"w",0,NULL,0,0,0,0,0},
+    {"post",securityWarningCommand,-1,"lt",0,NULL,0,0,0,0,0},
+    {"host:",securityWarningCommand,-1,"lt",0,NULL,0,0,0,0,0},
     {"latency",latencyCommand,-2,"aslt",0,NULL,0,0,0,0,0}
 };
 
@@ -784,6 +788,10 @@ void activeExpireCycle(int type) {
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
     PORT_LONGLONG start = ustime(), timelimit;
+    /* When clients are paused the dataset should be static not just from the
+     * POV of clients not being able to write, but also from the POV of
+     * expires and evictions of keys not being performed. */
+     if (clientsArePaused()) return;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exited
@@ -1057,12 +1065,15 @@ void databasesCron(void) {
         /* Rehash */
         if (server.activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
-                int work_done = incrementallyRehash(rehash_db % server.dbnum);
-                rehash_db++;
+                int work_done = incrementallyRehash(rehash_db);
                 if (work_done) {
                     /* If the function did some work, stop here, we'll do
                      * more at the next cron loop. */
                     break;
+                } else {
+                    /* If this db didn't need rehash, we'll try the next one. */
+                    rehash_db++;
+                    rehash_db %= server.dbnum;
                 }
             }
         }
@@ -1568,6 +1579,7 @@ void initServerConfig(void) {
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType,NULL);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.loading_process_events_interval_bytes = (1024*1024*2);
+    server.lua_time_limit = LUA_SCRIPT_TIME_LIMIT;
 
     server.lruclock = getLRUClock();
     resetServerSaveParams();
@@ -1627,6 +1639,8 @@ void initServerConfig(void) {
     server.rpopCommand = lookupCommandByCString("rpop");
     server.sremCommand = lookupCommandByCString("srem");
     server.execCommand = lookupCommandByCString("exec");
+    server.expireCommand = lookupCommandByCString("expire");
+    server.pexpireCommand = lookupCommandByCString("pexpire");
 
     /* Slow log */
     server.slowlog_log_slower_than = CONFIG_DEFAULT_SLOWLOG_LOG_SLOWER_THAN;
@@ -2644,6 +2658,7 @@ int prepareForShutdown(int flags) {
         }
         /* Append only file: fsync() the AOF and exit */
         serverLog(LL_NOTICE,"Calling fsync() on the AOF file.");
+        flushAppendOnlyFile(1);
         aof_fsync(server.aof_fd);
     }
 
@@ -3523,6 +3538,11 @@ int freeMemoryIfNeeded(void) {
     size_t mem_used, mem_tofree, mem_freed;
     int slaves = (int)listLength(server.slaves);                                WIN_PORT_FIX /* cast (int) */
     mstime_t latency, eviction_latency;
+
+    /* When clients are paused the dataset should be static not just from the
+     * POV of clients not being able to write, but also from the POV of
+     * expires and evictions of keys not being performed. */
+    if (clientsArePaused()) return C_OK;
 
     /* Remove the size of slaves output buffers and AOF buffer from the
      * count of used memory. */
