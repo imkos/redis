@@ -255,9 +255,9 @@ static sds cliVersion(void) {
     version = sdscatprintf(sdsempty(), "%s", REDIS_VERSION);
 
     /* Add git commit and working tree status when available */
-    if (strtol(redisGitSHA1(),NULL,16)) {
+    if (strtoll(redisGitSHA1(),NULL,16)) {
         version = sdscatprintf(version, " (git:%s", redisGitSHA1());
-        if (strtol(redisGitDirty(),NULL,10))
+        if (strtoll(redisGitDirty(),NULL,10))
             version = sdscatprintf(version, "-dirty");
         version = sdscat(version, ")");
     }
@@ -1056,7 +1056,7 @@ static int parseOptions(int argc, char **argv) {
             config.latency_history = 1;
         } else if (!strcmp(argv[i],"--lru-test") && !lastarg) {
             config.lru_test_mode = 1;
-            config.lru_test_sample_size = strtol(argv[++i],NULL,10);
+            config.lru_test_sample_size = strtoll(argv[++i],NULL,10);
         } else if (!strcmp(argv[i],"--slave")) {
             config.slave_mode = 1;
         } else if (!strcmp(argv[i],"--stat")) {
@@ -1369,7 +1369,7 @@ static void repl(void) {
                     int repeat, skipargs = 0;
                     char *endptr;
 
-                    repeat = strtol(argv[0], &endptr, 10);
+                    repeat = strtoll(argv[0], &endptr, 10);
                     if (argc > 1 && *endptr == '\0' && repeat) {
                         skipargs = 1;
                     } else {

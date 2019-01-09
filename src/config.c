@@ -549,7 +549,7 @@ void loadServerConfigFromString(char *config) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"cluster-node-timeout") && argc == 2) {
-            server.cluster_node_timeout = strtol(argv[1],NULL,10);
+            server.cluster_node_timeout = strtoll(argv[1],NULL,10);
             if (server.cluster_node_timeout <= 0) {
                 err = "cluster node timeout must be 1 or greater"; goto loaderr;
             }
@@ -570,21 +570,21 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"lua-time-limit") && argc == 2) {
-            server.lua_time_limit = strtol(argv[1],NULL,10);
+            server.lua_time_limit = strtoll(argv[1],NULL,10);
         } else if (!strcasecmp(argv[0],"slowlog-log-slower-than") &&
                    argc == 2)
         {
-            server.slowlog_log_slower_than = strtol(argv[1],NULL,10);
+            server.slowlog_log_slower_than = strtoll(argv[1],NULL,10);
         } else if (!strcasecmp(argv[0],"latency-monitor-threshold") &&
                    argc == 2)
         {
-            server.latency_monitor_threshold = strtol(argv[1],NULL,10);
+            server.latency_monitor_threshold = strtoll(argv[1],NULL,10);
             if (server.latency_monitor_threshold < 0) {
                 err = "The latency threshold can't be negative";
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"slowlog-max-len") && argc == 2) {
-            server.slowlog_max_len = (PORT_ULONG)(strtol(argv[1],NULL,10));    WIN_PORT_FIX /* cast (PORT_ULONG) */
+            server.slowlog_max_len = (PORT_ULONG)(strtoll(argv[1],NULL,10));    WIN_PORT_FIX /* cast (PORT_ULONG) */
         } else if (!strcasecmp(argv[0],"client-output-buffer-limit") &&
                    argc == 5)
         {

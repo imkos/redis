@@ -2212,7 +2212,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         if (sdslen(l) >= 32 &&
             !memcmp(l,"master_link_down_since_seconds",30))
         {
-            ri->master_link_down_time = strtol(l+31,NULL,10)*1000;
+            ri->master_link_down_time = strtoll(l+31,NULL,10)*1000;
         }
 
         /* role:<role> */

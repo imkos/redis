@@ -319,7 +319,7 @@ size_t zmalloc_get_rss(void) {
     if (!x) return 0;
     *x = '\0';
 
-    rss = strtol(p,NULL,10);
+    rss = strtoll(p,NULL,10);
     rss *= page;
     return rss;
 }

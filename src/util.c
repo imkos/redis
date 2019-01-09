@@ -230,7 +230,7 @@ PORT_LONGLONG memtoll(const char *p, int *err) {
 
     char *endptr;
     errno = 0;
-    val = strtol(buf,&endptr,10);
+    val = strtoll(buf,&endptr,10);
     if ((val == 0 && errno == EINVAL) || *endptr != '\0') {
         if (err) *err = 1;
         return 0;
